@@ -44,7 +44,8 @@ def get_initial_schedules(deliveryReq, initPoses, idleTime, directionsRuleset):
         for req_idx, req in enumerate(org_dest[vehicle]):
             path = bfs_paths(req[0], req[1], directionsRuleset)
             # remove the unnecessary step (e.g. 6 idles instead of 5)
-            if req_idx == 1:
+            if req_idx == 1 and (deliveryReq[vehicle][0] != deliveryReq[vehicle][1]): 
+                # if the deliveryReqs are the same cells, the additional one is needed:
                 path = path[1:]
 
             vehicleSchedules[vehicle].extend(path)
@@ -69,7 +70,56 @@ def get_collision(vehicleSchedules):
                 break
     return collisions, vehicle_combs
 
-def solve_collisions(collisions, vehicle_combs, vehicleSchedules, curSch_lens, idleTime):
+def addTo_idlingForSolving(vehicle, idlingForSolving, idlingStart_idx, idlingTime, schToChange, curSch_lens):
+    """adding the idling made for solving the collisions for later possible use (when the vehicle collides at the time step of the idling)
+    the function also adds any effects of the current idling to previous made idlings
+    used in solve_collisions()"""
+    if idlingForSolving[vehicle]:
+        idling_len = len(idlingForSolving[vehicle])
+        idling_record_count = 0 # to avoid multiple recordings for each idling in else below
+        print(idling_len)
+        for idx, idling in enumerate(idlingForSolving[vehicle][:idling_len]):
+            if idlingStart_idx in range(idling[0],idling[1]+1): # if it is in the range
+                print("ran the range vehicle {}".format(vehicle))
+                # append the current idling to the previous one as the same number
+                idlingForSolving[vehicle][idx][1] += idlingTime
+                print(idlingForSolving[vehicle], "if")
+            else:
+                if idling_record_count == 0:
+                    # if the idling was not recorded in a previous else statement
+                    print(idlingStart_idx, idlingStart_idx+idlingTime, vehicle)
+                    idlingForSolving[vehicle].append([idlingStart_idx, idlingStart_idx+idlingTime])
+                    # adding info about what stage this idling to later be able to edit curSch_lens if a time step in range of this idling collides
+                    if schToChange == 1:
+                        idlingForSolving[vehicle][-1].extend([1])
+                    elif schToChange == 2:
+                        idlingForSolving[vehicle][-1].extend([2])
+                    else:
+                        print("schToChange is not defined for vehicle {}".format(vehicle))
+                    idling_record_count += 1
+                # in case the idling affects the previous idling
+                if idling[0] > idlingStart_idx:
+                    idling[0] += idlingTime
+                    idling[1] += idlingTime
+                print(idlingForSolving[vehicle], "else")
+    else:
+        # if it is a new idling for the vehicle no problem in affecting previous idlings
+        idlingForSolving[vehicle].append([idlingStart_idx, idlingStart_idx+idlingTime])
+        if schToChange == 1:
+            idlingForSolving[vehicle][-1].extend([1])
+        elif schToChange == 2:
+            idlingForSolving[vehicle][-1].extend([2])
+        else:
+            print("schToChange is not defined for vehicle {}".format(vehicle))
+    if schToChange == 1:
+        curSch_lens[vehicle][0] += idlingTime
+    elif schToChange == 2:
+        curSch_lens[vehicle][1] += idlingTime
+    else:
+        print("schToChange is not defined for vehicle {}".format(vehicle))
+    return idlingForSolving, curSch_lens
+
+def solve_collisions(collisions, vehicle_combs, vehicleSchedules, curSch_lens, idleTime, idlingForSolving):
     """prevent collisions by idling a vehicle that is not idling"""
     dealtVehicles = []
     for col_idx, collision in enumerate(collisions):
@@ -80,7 +130,19 @@ def solve_collisions(collisions, vehicle_combs, vehicleSchedules, curSch_lens, i
             # if yes one of them might have already transformed
             # and thus we would not solve the collision correctly
             # check if either of the vehicles is idling
+            # check how improtant cell indeces
+            first_stage_idx1 = curSch_lens[vehicle_combs[col_idx][0]][0]-1 # when we reached for-cell
+            first_break_idx1 = first_stage_idx1 + idleTime[vehicle_combs[col_idx][0]][0] # when we finished idling in for-cell
+            second_stage_idx1 = first_break_idx1 + curSch_lens[vehicle_combs[col_idx][0]][1]-1 # when we reached to-cell
+            second_break_idx1 = second_stage_idx1 + idleTime[vehicle_combs[col_idx][0]][1] # when we finished idling in to-cell
+            first_stage_idx2 = curSch_lens[vehicle_combs[col_idx][1]][0]-1
+            first_break_idx2 = first_stage_idx2 + idleTime[vehicle_combs[col_idx][1]][0]
+            second_stage_idx2 = first_break_idx2 + curSch_lens[vehicle_combs[col_idx][1]][1]-1
+            second_break_idx2 = second_stage_idx2 + idleTime[vehicle_combs[col_idx][1]][1]
             if_idling = [False, False]
+            idlingLefts = defaultdict(int)
+            idlingStarts = defaultdict(int)
+            schToChange = defaultdict(int) # to change the count in curSch_lens appropriately
             try:
                 same_as_next1 = vehicleSchedules[vehicle_combs[col_idx][0]][collision] == vehicleSchedules[vehicle_combs[col_idx][0]][collision+1]
             except:
@@ -94,19 +156,6 @@ def solve_collisions(collisions, vehicle_combs, vehicleSchedules, curSch_lens, i
             if vehicleSchedules[vehicle_combs[col_idx][1]][collision] == vehicleSchedules[vehicle_combs[col_idx][1]][collision-1] or same_as_next2:
                 if_idling[1] = True
             if if_idling[0] == True and if_idling[1] == True:
-                # check how much is left for both of them to idle
-                first_stage_idx1 = curSch_lens[vehicle_combs[col_idx][0]][0]-1
-                first_break_idx1 = first_stage_idx1 + idleTime[vehicle_combs[col_idx][0]][0]
-                second_stage_idx1 = first_break_idx1 + curSch_lens[vehicle_combs[col_idx][0]][1]-1
-                second_break_idx1 = second_stage_idx1 + idleTime[vehicle_combs[col_idx][0]][1]
-                first_stage_idx2 = curSch_lens[vehicle_combs[col_idx][1]][0]-1
-                first_break_idx2 = first_stage_idx2 + idleTime[vehicle_combs[col_idx][1]][0]
-                second_stage_idx2 = first_break_idx2 + curSch_lens[vehicle_combs[col_idx][1]][1]-1
-                second_break_idx2 = second_stage_idx2 + idleTime[vehicle_combs[col_idx][1]][1]
-                # find out which delivery requirement the vehicles were doing
-                idlingLefts = defaultdict(int)
-                idlingStarts = defaultdict(int)
-                schToChange = defaultdict(int) # to change the count in curSch_lens appropriately
                 # recording how much time step is left for each of the vehicles to idle
                 if collision in range(first_stage_idx1, first_break_idx1):
                     idlingLefts["first"] = first_break_idx1 - collision
@@ -116,6 +165,16 @@ def solve_collisions(collisions, vehicle_combs, vehicleSchedules, curSch_lens, i
                     idlingLefts["first"] = second_break_idx1 - collision
                     idlingStarts["first"] = second_stage_idx1
                     schToChange["first"] = 2
+                else:
+                    if idlingForSolving[vehicle_combs[col_idx][0]]:
+                        for idling in idlingForSolving[vehicle_combs[col_idx][0]]:
+                            if collision in range(idling[0],idling[1]+1):
+                                idlingLefts["first"] = idling[1]+1 - collision
+                                idlingStarts["first"] = idling[0]
+                                schToChange["first"] = idling[2]
+                                break
+                    else:
+                        print("vehicle {} is not idling but marked as idling".format(vehicle_combs[col_idx][0]))
                 if collision in range(first_stage_idx2, first_break_idx2):
                     idlingLefts["second"] = first_break_idx2 - collision
                     idlingStarts["second"] = first_stage_idx2
@@ -124,88 +183,101 @@ def solve_collisions(collisions, vehicle_combs, vehicleSchedules, curSch_lens, i
                     idlingLefts["second"] = second_break_idx2 - collision
                     idlingStarts["second"] = second_stage_idx2
                     schToChange["second"] = 2
+                else:
+                    if idlingForSolving[vehicle_combs[col_idx][1]]:
+                        for idling in idlingForSolving[vehicle_combs[col_idx][1]]:
+                            if collision in range(idling[0],idling[1]+1):
+                                idlingLefts["second"] = idling[1]+1 - collision
+                                idlingStarts["second"] = idling[0]
+                                schToChange["second"] = idling[2]
+                                break
+                    else:
+                        print("vehicle {} is not idling but marked as idling".format(vehicle_combs[col_idx][0]))
                 # making wait for the vehicle which started idling earlier
                 if idlingStarts["first"] > idlingStarts["second"]:
                     # if the first of the 2 vehicles started idling later it has to wait to avoid collision
                     vehicle1 = vehicleSchedules[vehicle_combs[col_idx][0]]
                     vehicleSchedules[vehicle_combs[col_idx][0]] = vehicle1[:idlingStarts["first"]]+[vehicle1[idlingStarts["first"]-1]]*idlingLefts["second"]+vehicle1[idlingStarts["first"]:]
                     dealtVehicles.append(vehicle_combs[col_idx][0])
-                    if schToChange["first"] == 1:
-                        curSch_lens[vehicl_combs[col_idx][0]][0] += idlingLefts["second"]
-                    elif schToChange["first"] == 2:
-                        curSch_lens[vehicl_combs[col_idx][0]][1] += idlingLefts["second"]
+                    # editting previous recorded idlings in idlingForSolving if this one affects them
+                    idlingForSolving, curSch_lens = addTo_idlingForSolving(vehicle_combs[col_idx][0], idlingForSolving, idlingStarts["first"]-1, idlingLefts["second"], schToChange["first"], curSch_lens)
                 elif idlingStarts["second"] > idlingStarts["first"]:
                     # if the second of the 2 vehicles started idling later it has to wait to avoid collision
                     vehicle2 = vehicleSchedules[vehicle_combs[col_idx][1]]
-                    print(idlingLefts["first"])
                     vehicleSchedules[vehicle_combs[col_idx][1]] = vehicle2[:idlingStarts["second"]]+[vehicle2[idlingStarts["second"]-1]]*idlingLefts["first"]+vehicle2[idlingStarts["second"]:]
                     dealtVehicles.append(vehicle_combs[col_idx][1])
-                    if schToChange["second"] == 1:
-                        curSch_lens[vehicl_combs[col_idx][1]][0] += idlingLefts["first"]
-                    elif schToChange["second"] == 2:
-                        curSch_lens[vehicl_combs[col_idx][1]][1] += idlingLefts["first"]
+                    # adding the idling added to later use if needed for finding idlingLefts
+                    idlingForSolving, curSch_lens = addTo_idlingForSolving(vehicle_combs[col_idx][1], idlingForSolving, idlingStarts["second"]-1, idlingLefts["first"], schToChange["second"], curSch_lens)
                 else:
-                    print("Both vehicles that started idling at the same time collided (which I think is impossible to have as non-idling collisions would first be outputed and solved")
+                    vehicle1 = vehicleSchedules[vehicle_combs[col_idx][0]]
+                    vehicleSchedules[vehicle_combs[col_idx][0]] = vehicle1[:idlingStarts["first"]]+[vehicle1[idlingStarts["first"]-1]]*idlingLefts["second"]+vehicle1[idlingStarts["first"]:]
+                    dealtVehicles.append(vehicle_combs[col_idx][0])
+                    # adding the idling added to later use if needed for finding idlingLefts
+                    idlingForSolving, curSch_lens = addTo_idlingForSolving(vehicle_combs[col_idx][0], idlingForSolving, idlingStarts["first"]-1, idlingLefts["second"], schToChange["first"], curSch_lens)
             elif if_idling[0] == True and if_idling[1] == False: # if the 1st of the vehicles is idling
                 # find out when the idling vehicle stops idling
-                first_stage_idx = curSch_lens[vehicle_combs[col_idx][0]][0]-1
-                first_break_idx = first_stage_idx + idleTime[vehicle_combs[col_idx][0]][0]
-                second_stage_idx = first_break_idx + curSch_lens[vehicle_combs[col_idx][0]][1]-1
-                second_break_idx = second_stage_idx + idleTime[vehicle_combs[col_idx][0]][1]
-                if collision in range(first_stage_idx, first_break_idx):
-                    idlingLeft = first_break_idx - collision 
+                if collision in range(first_stage_idx1, first_break_idx1):
+                    idlingLeft = first_break_idx1 - collision 
+                elif collision in range(second_stage_idx1, second_break_idx1):
+                    idlingLeft = second_break_idx1 - collision
+                else:
+                    if idlingForSolving[vehicle_combs[col_idx][0]]:
+                        for idling in idlingForSolving[vehicle_combs[col_idx][0]]:
+                            if collision in range(idling[0],idling[1]+1):
+                                idlingLeft = idling[1]+1 - collision
+                                idlingStarts["first"] = idling[0]
+                                break
+                    else:
+                        print("vehicle {} is not idling but marked as idling".format(vehicle_combs[col_idx][0]))
+                if collision in range(1, first_stage_idx2+1):
                     schToChange = 1
-                elif collision in range(second_stage_idx, second_break_idx):
-                    idlingLeft = second_break_idx - collision
+                elif collision in range(first_break_idx2, second_stage_idx2):
                     schToChange = 2
+                else:
+                    print("Collision for vehicle {} is in either cell 1 or while it is idling but it is marked as not idling".format(vehicle_combs[col_idx][1]))
                 # make the other vehicle wait
                 vehicle2 = vehicleSchedules[vehicle_combs[col_idx][1]]
                 vehicleSchedules[vehicle_combs[col_idx][1]] = vehicle2[:collision]+[vehicle2[collision-1]]*idlingLeft+vehicle2[collision:]
                 dealtVehicles.append(vehicle_combs[col_idx][1])
-                if schToChange == 1:
-                    curSch_lens[vehicl_combs[col_idx][1]][0] += idlingLeft
-                elif schToChange == 2:
-                    curSch_lens[vehicl_combs[col_idx][1]][1] += idlingLeft
+                idlingForSolving, curSch_lens = addTo_idlingForSolving(vehicle_combs[col_idx][1], idlingForSolving, collision-1, idlingLeft, schToChange, curSch_lens)
             elif if_idling[0] == False and if_idling[1] == True: # if the 2nd of the vehicles is idling
                 # find out when the idling vehicle stops idling
-                first_stage_idx = curSch_lens[vehicle_combs[col_idx][1]][0]-1
-                first_break_idx = first_stage_idx + idleTime[vehicle_combs[col_idx][1]][0]
-                second_stage_idx = first_break_idx + curSch_lens[vehicle_combs[col_idx][1]][1]-1
-                second_break_idx = second_stage_idx + idleTime[vehicle_combs[col_idx][1]][1]
-                if collision in range(first_stage_idx, first_break_idx):
-                    idlingLeft = first_break_idx - collision 
+                if collision in range(first_stage_idx2, first_break_idx2):
+                    idlingLeft = first_break_idx2 - collision 
+                elif collision in range(second_stage_idx2, second_break_idx2):
+                    idlingLeft = second_break_idx2 - collision
+                else:
+                    if idlingForSolving[vehicle_combs[col_idx][1]]:
+                        for idling in idlingForSolving[vehicle_combs[col_idx][1]]:
+                            if collision in range(idling[0],idling[1]+1):
+                                idlingLeft = idling[1]+1 - collision
+                                idlingStarts["second"] = idling[0]
+                                break
+                    else:
+                        print("vehicle {} is not idling but marked as idling".format(vehicle_combs[col_idx][0]))
+                if collision in range(1, first_stage_idx1+1):
                     schToChange = 1
-                elif collision in range(second_stage_idx, second_break_idx):
-                    idlingLeft = second_break_idx - collision
+                elif collision in range(first_break_idx1, second_stage_idx1):
                     schToChange = 2
+                else:
+                    print("Collision for vehicle {} is in either cell 1 or while it is idling but it is marked as not idling".format(vehicle_combs[col_idx][0]))
                 # make the other vehicle wait
                 vehicle1 = vehicleSchedules[vehicle_combs[col_idx][0]]
                 vehicleSchedules[vehicle_combs[col_idx][0]] = vehicle1[:collision]+[vehicle1[collision-1]]*idlingLeft+vehicle1[collision:]
                 dealtVehicles.append(vehicle_combs[col_idx][0])
-                if schToChange == 1:
-                    curSch_lens[vehicl_combs[col_idx][0]][0] += idlingLeft
-                elif schToChange == 2:
-                    curSch_lens[vehicl_combs[col_idx][0]][1] += idlingLeft
+                idlingForSolving, curSch_lens = addTo_idlingForSolving(vehicle_combs[col_idx][0], idlingForSolving, collision-1, idlingLeft, schToChange, curSch_lens)
             else: # if neither of the vehicles is idling
                 vehicle1 = vehicleSchedules[vehicle_combs[col_idx][0]]
                 vehicleSchedules[vehicle_combs[col_idx][0]] = vehicle1[:collision]+[vehicle1[collision-1]]+vehicle1[collision:]
                 dealtVehicles.append(vehicle_combs[col_idx][0])
-                
                 # recording changes in schedule to curSch_lens
-                first_stage_idx = curSch_lens[vehicle_combs[col_idx][0]][0]-1
-                first_break_idx = first_stage_idx + idleTime[vehicle_combs[col_idx][0]][0]
-                second_stage_idx = first_break_idx + curSch_lens[vehicle_combs[col_idx][0]][1]-1
-                second_break_idx = second_stage_idx + idleTime[vehicle_combs[col_idx][0]][1]
-                if collision in range(first_stage_idx, first_break_idx):
+                if collision in range(1, first_stage_idx1+1):
                     schToChange = 1
-                elif collision in range(second_stage_idx, second_break_idx):
+                elif collision in range(first_break_idx1, second_stage_idx1):
                     schToChange = 2
                 else:
-                    schToChange = 0
-                if schToChange == 1:
-                    curSch_lens[vehicl_combs[col_idx][0]][0] += 1
-                elif schToChange == 2:
-                    curSch_lens[vehicl_combs[col_idx][0]][1] += 1
+                    print("Collision for vehicle {} is in either cell 1 or while it is idling but it is marked as not idling".format(vehicle_combs[col_idx][0]))
+                idlingForSolving, curSch_lens = addTo_idlingForSolving(vehicle_combs[col_idx][0], idlingForSolving, collision-1, 1, schToChange, curSch_lens)
     return vehicleSchedules, curSch_lens
 
 def traverse_others(alternative_paths, vehicleSchedules, directionsRuleset, initPoses, deliveryReq):
