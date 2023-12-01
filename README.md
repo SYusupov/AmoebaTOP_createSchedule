@@ -1,2 +1,2 @@
 # AmoebaTOP_createSchedule
-create a legal schedule by idling when needed
+creating a legal schedule for Vehicle Routing Problems by idling the vehicles when needed
